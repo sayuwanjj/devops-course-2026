@@ -50,5 +50,13 @@ check "Порты 5000 и 5432 прослушиваются только на 12
       "$(ss -tlnH | awk '{print $4}' | grep -E ':(5000|5432)$' | grep -v '^127\.0\.0\.1:' | tr '\n' ' ' | sed 's/ $//')"
 check "Права файла ~/app/.env равны 600" "600" "$(stat -c '%a' "$APP_ENV" 2>/dev/null)"
 
+echo "[6] Хранилище секретов"
+check "Контейнер vault-dev запущен" "true" "$(sudo docker inspect -f '{{.State.Running}}' vault-dev 2>/dev/null)"
+check "Vault распечатан (sealed=false)" "false" \
+      "$(sudo docker exec vault-dev vault status -format=json 2>/dev/null | jq -r .sealed)"
+check "Порт 8200 прослушивается только на 127.0.0.1" "" \
+      "$(ss -tlnH | awk '{print $4}' | grep -E ':8200$' | grep -v '^127\.0\.0\.1:' | tr '\n' ' ' | sed 's/ $//')"
+check "Файл с корневым токеном имеет права 600" "600" "$(stat -c '%a' "/home/${SUDO_USER:-$USER}/.vault-root" 2>/dev/null)"
+
 echo "Пройдено: $PASS, не пройдено: $FAIL"
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
