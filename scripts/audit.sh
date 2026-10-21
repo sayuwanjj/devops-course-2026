@@ -41,5 +41,14 @@ check "Сертификат действует ещё не менее ${CERT_DAY
 check "Нет файлов ресурса с правом записи для всех" "" "$(sudo find /var/www/devops-site -perm -o+w)"
 check "Права закрытого ключа TLS равны 600" "600" "$(sudo stat -c '%a' /etc/ssl/private/devops.key)"
 
+echo "[5] Контейнеризация"
+APP_ENV="/home/${SUDO_USER:-$USER}/app/.env"
+check "Служба docker активна" "active" "$(systemctl is-active docker)"
+check "Контейнер СУБД в состоянии healthy" "healthy" \
+      "$(sudo docker inspect -f '{{.State.Health.Status}}' app-db-1 2>/dev/null)"
+check "Порты 5000 и 5432 прослушиваются только на 127.0.0.1" "" \
+      "$(ss -tlnH | awk '{print $4}' | grep -E ':(5000|5432)$' | grep -v '^127\.0\.0\.1:' | tr '\n' ' ' | sed 's/ $//')"
+check "Права файла ~/app/.env равны 600" "600" "$(stat -c '%a' "$APP_ENV" 2>/dev/null)"
+
 echo "Пройдено: $PASS, не пройдено: $FAIL"
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1

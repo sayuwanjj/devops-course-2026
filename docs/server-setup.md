@@ -199,3 +199,50 @@ server {
 ```
 
 Снимок состояния `04-nginx-https` — после перевода ресурса на HTTPS (задание 2).
+
+## 9. Контейнеризация
+
+| Параметр | Значение |
+|---|---|
+| Установка Docker Engine | официальный репозиторий Docker (https://download.docker.com), пакеты `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`; пакет `docker.io` не используется |
+| Версия | Docker Engine 29.9.2, Docker Compose 5.6.1 |
+| Реестр образов | Docker Hub (без зеркала) |
+| Участники группы `docker` | `devops` (имеет право sudo; участие в группе `docker` равносильно правам root) |
+| Расположение проекта | `/home/devops/app` (доставляется с хоста: `rsync -avz --delete --exclude=.env app/ devops:app/`) |
+| Файл секретов | `/home/devops/app/.env`, владелец `devops`, права `600`; создаётся только на сервере из `.env.example`, пароль — `openssl rand -hex 16`; в репозиторий и на хост не копируется |
+| Сервисы | `app` (образ `devops-app:1.0`, пользователь `app`, gunicorn на порту 5000), `db` (`postgres:16-alpine`, проверка `pg_isready`) |
+| Публикуемые порты | `127.0.0.1:5000 → app:5000`; порт СУБД 5432 не публикуется |
+| Сеть | пользовательская сеть `app_backend` (bridge), СУБД доступна приложению по имени `db` |
+| Именованные тома | `app_db_data` → `/var/lib/postgresql/data` |
+| Обратный прокси-сервер | Nginx, `location /app/` в блоке HTTPS, `proxy_pass http://127.0.0.1:5000/` |
+
+Развёртывание проекта:
+
+```bash
+# [Хост] из корня репозитория
+rsync -avz --delete --exclude=.env app/ devops:app/
+# [VM] однократно — секреты
+cd ~/app && cp .env.example .env && chmod 600 .env
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+# [VM] запуск и проверка
+docker compose up -d --build
+docker compose ps
+curl -s http://127.0.0.1:5000/
+```
+
+Фрагмент блока HTTPS `/etc/nginx/sites-available/devops-site`:
+
+```nginx
+    location /app/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+```
+
+Публиковать порт контейнера на `0.0.0.0` нельзя: правила Docker в iptables обрабатывают пакет раньше UFW, и порт становится доступен из сети без разрешающего правила (проверено на порту 5001, шаг 3.1 ПР № 7).
+
+Снимок состояния `05-docker-compose` — после запуска конфигурации «приложение + СУБД» (задание 2 ПР № 7).
+
