@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Аудит конфигурации devops-vm. Запуск на сервере: sudo bash scripts/audit.sh
+# Аудит конфигурации devops-vm. Запуск на сервере: sudo bash scripts/audit.sh [дней_до_истечения_сертификата]
 set -uo pipefail
 
 PASS=0; FAIL=0
+CERT_DAYS="${1:-30}"
 
 check() {
     local desc="$1" expected="$2" actual="$3"
@@ -31,6 +32,14 @@ check "Политика входящего трафика deny" "deny" "$(sudo u
 
 echo "[3] Учётные записи"
 awk -F: '$3>=1000 && $3<65534 {printf "         %s (uid=%s)\n",$1,$3}' /etc/passwd
+
+echo "[4] Веб-сервер"
+check "Служба nginx активна" "active" "$(systemctl is-active nginx)"
+check "Конфигурация nginx корректна" "0" "$(sudo nginx -t >/dev/null 2>&1; echo $?)"
+check "Сертификат действует ещё не менее ${CERT_DAYS} дн." "0" \
+      "$(openssl x509 -in /etc/ssl/certs/devops.crt -noout -checkend $((CERT_DAYS*86400)) >/dev/null; echo $?)"
+check "Нет файлов ресурса с правом записи для всех" "" "$(sudo find /var/www/devops-site -perm -o+w)"
+check "Права закрытого ключа TLS равны 600" "600" "$(sudo stat -c '%a' /etc/ssl/private/devops.key)"
 
 echo "Пройдено: $PASS, не пройдено: $FAIL"
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
