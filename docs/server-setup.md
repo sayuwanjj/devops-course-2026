@@ -19,16 +19,26 @@
 
 | Адаптер | Тип | Адрес в ВМ | Назначение |
 |---|---|---|---|
-| 1 | NAT | 10.0.2.15/24 | доступ в Интернет (apt), вход по SSH через проброс порта |
-| 2 | Host-only (VirtualBox Host-Only Ethernet Adapter) | 127.0.0.1/24 (DHCP) | прямой доступ с хоста: веб-сервер, имя `devops.local` |
+| 1 | NAT | 10.0.2.15/24 (шлюз 10.0.2.2) | доступ в Интернет (apt), вход по SSH и доступ к веб-серверу через проброс портов |
+| 2 | отключён | — | адаптер Host-only в Windows не запустился (`VERR_INTNET_FLT_IF_NOT_FOUND`, VirtualBox работает поверх Hyper-V); вместо прямого доступа по адресу 192.168.56.x используется проброс портов NAT на 127.0.0.1 |
 
-## 3. Правило проброса портов
+## 3. Правила проброса портов (адаптер 1, NAT)
 
-Адаптер 1 (NAT), правило `ssh`: TCP, адрес хоста `127.0.0.1`, **порт хоста 2222 → порт гостя 2222**
-(до усиления SSH гостевой порт был 22).
+| Правило | Протокол | Адрес:порт хоста | Порт гостя | Назначение |
+|---|---|---|---|---|
+| ssh | TCP | 127.0.0.1:2222 | 2222 (до усиления SSH — 22) | SSH |
+| http | TCP | 127.0.0.1:80 | 80 | HTTP (ПР № 6) |
+| https | TCP | 127.0.0.1:443 | 443 | HTTPS (ПР № 6) |
+| test8080 | TCP | 127.0.0.1:8080 | 8080 | проверка блокировки UFW (задание 3.4) |
+
+Порты хоста совпадают с портами гостя, поэтому перенаправление `return 301 https://$host$request_uri` в ПР № 6 работает без указания порта.
 
 ```bash
-# [Хост]
+# [Хост], ВМ выключена
+VBoxManage modifyvm devops-vm --nic1 nat --nic2 none
+VBoxManage modifyvm devops-vm --natpf1 "ssh,tcp,127.0.0.1,2222,,22"
+VBoxManage modifyvm devops-vm --natpf1 "http,tcp,127.0.0.1,80,,80" --natpf1 "https,tcp,127.0.0.1,443,,443" --natpf1 "test8080,tcp,127.0.0.1,8080,,8080"
+# [Хост] после переноса SSH на порт 2222 (задание 2), ВМ работает
 VBoxManage controlvm devops-vm natpf1 delete ssh
 VBoxManage controlvm devops-vm natpf1 "ssh,tcp,127.0.0.1,2222,,2222"
 ```
@@ -118,7 +128,7 @@ sudo ufw logging medium
 
 Имя узла: `sudo hostnamectl set-hostname devops-vm`, в `/etc/hosts` строка
 `127.0.1.1 devops-vm.devops.local devops-vm` (`hostname -f` → `devops-vm.devops.local`).
-На хосте в `C:\Windows\System32\drivers\etc\hosts`: `127.0.0.1    devops.local`.
+На хосте в `C:\Windows\System32\drivers\etc\hosts`: `127.0.0.1    devops.local` (доступ через проброс портов NAT).
 
 ## 7. Снимки состояния
 
@@ -127,3 +137,65 @@ sudo ufw logging medium
 | 01-clean-install | после первой загрузки и `apt update && apt upgrade`, ВМ выключена |
 | 02-keys-configured | после создания devops, размещения ключа и `~/.ssh/config` (задание 1) |
 | 03-ssh-hardened | после усиления SSH и смены проброса порта (задание 2) |
+
+## 8. Веб-сервер
+
+| Параметр | Значение |
+|---|---|
+| Пакет | `nginx` (Ubuntu 24.04, `sudo apt install -y nginx`) |
+| Конфигурация ресурса | `/etc/nginx/sites-available/devops-site`, ссылка в `/etc/nginx/sites-enabled/`; стандартный ресурс `default` отключён (ссылка удалена) |
+| Каталог ресурса | `/var/www/devops-site`, владелец `devops:devops`, права каталогов 755, файлов 644 (модель «владелец пишет, веб-сервер читает») |
+| Сертификат | `/etc/ssl/certs/devops.crt`, `root:root`, 644, самоподписанный, CN и SAN `DNS:devops.local`, срок 365 дней |
+| Закрытый ключ | `/etc/ssl/private/devops.key`, `root:root`, 600 |
+| Журналы | `/var/log/nginx/devops-site.access.log`, `/var/log/nginx/devops-site.error.log` |
+| Доставка содержимого | `scripts/deploy.sh` (rsync `--delete --chmod=D755,F644` через псевдоним `devops`) |
+
+```bash
+# [VM]
+sudo apt install -y nginx
+sudo mkdir -p /var/www/devops-site && sudo chown -R devops:devops /var/www/devops-site
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/devops.key -out /etc/ssl/certs/devops.crt \
+  -subj "/CN=devops.local" -addext "subjectAltName=DNS:devops.local"
+sudo ln -s /etc/nginx/sites-available/devops-site /etc/nginx/sites-enabled/
+sudo rm /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+# [Хост]
+scp devops:/etc/ssl/certs/devops.crt ~/devops.crt
+scripts/deploy.sh
+```
+
+Конфигурация `/etc/nginx/sites-available/devops-site`:
+
+```nginx
+server {
+    listen 80;
+    listen [::]:80;
+    server_name devops.local;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name devops.local;
+
+    ssl_certificate     /etc/ssl/certs/devops.crt;
+    ssl_certificate_key /etc/ssl/private/devops.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    root /var/www/devops-site;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    error_page 404 /404.html;
+
+    access_log /var/log/nginx/devops-site.access.log;
+    error_log /var/log/nginx/devops-site.error.log;
+}
+```
+
+Снимок состояния `04-nginx-https` — после перевода ресурса на HTTPS (задание 2).
