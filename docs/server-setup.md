@@ -246,3 +246,38 @@ curl -s http://127.0.0.1:5000/
 
 Снимок состояния `05-docker-compose` — после запуска конфигурации «приложение + СУБД» (задание 2 ПР № 7).
 
+
+## 10. Хранилище секретов (HashiCorp Vault)
+
+| Параметр | Значение |
+|---|---|
+| Режим | dev-сервер Vault в контейнере `vault-dev` (образ `hashicorp/vault:1.20`, версия v1.20.4) — учебный стенд: хранилище в памяти, автоматически распечатано, данные теряются при перезапуске |
+| Запуск | `docker run -d --name vault-dev --cap-add=IPC_LOCK -p 127.0.0.1:8200:8200 -e VAULT_DEV_ROOT_TOKEN_ID -e VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200 -e VAULT_ADDR=http://127.0.0.1:8200 hashicorp/vault:1.20` |
+| Адрес API | `http://127.0.0.1:8200` (только локальный адрес сервера; из сети недоступен) |
+| Корневой токен | случайный (`openssl rand -hex 16`), файл `~/.vault-root`, права `600`; в репозиторий и отчёт не попадает |
+| Клиент | функция `vault()` из `~/vault/vault-lib.sh` — вызывает `vault` внутри контейнера через `docker exec` |
+| Механизмы секретов | `secret/` — KV версии 2; `database/` — динамические учётные записи PostgreSQL; `transit/` — шифрование как сервис |
+| Методы аутентификации | `token`, `approle` (роль `devops-app`) |
+| Политики | `app-read` — чтение `secret/data/devops-app/*` (файл `vault/policies/app-read.hcl`) |
+| Секрет приложения | `secret/devops-app/db` — переменные `POSTGRES_*` и `DB_HOST` из `~/app/.env` |
+| Получение секрета приложением | `scripts/vault-env.sh`: вход по AppRole → чтение `secret/devops-app/db` → файл с правами 600 → отзыв токена |
+| Динамические учётные записи БД | подключение `database/config/app-db` (контейнер подключён к сети `app_backend`), роль `readonly` (`SELECT`, TTL 1 ч, максимум 24 ч) |
+| Журнал аудита | файловое устройство аудита `/tmp/vault-audit.log` внутри контейнера |
+
+Запуск и первичная настройка:
+
+```bash
+# [VM]
+umask 077; openssl rand -hex 16 > ~/.vault-root; umask 022
+export VAULT_DEV_ROOT_TOKEN_ID="$(cat ~/.vault-root)"
+docker run -d --name vault-dev --cap-add=IPC_LOCK -p 127.0.0.1:8200:8200 \
+  -e VAULT_DEV_ROOT_TOKEN_ID -e VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200 \
+  -e VAULT_ADDR=http://127.0.0.1:8200 hashicorp/vault:1.20
+source ~/vault/vault-lib.sh
+vault policy write app-read - < ~/vault/app-read.hcl
+vault auth enable approle
+vault write auth/approle/role/devops-app token_policies=app-read token_ttl=1h secret_id_ttl=24h
+vault kv put secret/devops-app/db $(grep -v '^#' ~/app/.env | xargs)
+```
+
+Ограничение учебного стенда: dev-сервер хранит данные в памяти. Для эксплуатации требуется сервер с постоянным хранилищем (`storage "raft"`), TLS, распечатыванием по ключам Шамира или auto-unseal и отказом от корневого токена после настройки.
