@@ -58,5 +58,19 @@ check "Порт 8200 прослушивается только на 127.0.0.1" "
       "$(ss -tlnH | awk '{print $4}' | grep -E ':8200$' | grep -v '^127\.0\.0\.1:' | tr '\n' ' ' | sed 's/ $//')"
 check "Файл с корневым токеном имеет права 600" "600" "$(stat -c '%a' "/home/${SUDO_USER:-$USER}/.vault-root" 2>/dev/null)"
 
+
+echo "[6] Контрольная работа № 2"
+KR2_DIR="/home/${SUDO_USER:-$USER}/kr2"
+KR2_PORT=8002
+KR2_REDIS="$(sudo docker compose --project-directory "$KR2_DIR" ps -q redis 2>/dev/null)"
+check "Контейнер сервиса redis в состоянии healthy" "healthy" \
+      "$(sudo docker inspect -f '{{.State.Health.Status}}' "$KR2_REDIS" 2>/dev/null)"
+check "Порт ${KR2_PORT} опубликован только на 127.0.0.1" "127.0.0.1:${KR2_PORT}" \
+      "$(sudo docker compose --project-directory "$KR2_DIR" port app "$KR2_PORT" 2>/dev/null | sort -u | tr '\n' ' ' | sed 's/ $//')"
+check "Права файла ~/kr2/.env равны 600" "600" "$(stat -c '%a' "$KR2_DIR/.env" 2>/dev/null)"
+check "Сертификат kr2.crt действует ещё не менее 30 дн." "0" \
+      "$(openssl x509 -in /etc/ssl/certs/kr2.crt -noout -checkend $((30*86400)) >/dev/null 2>&1; echo $?)"
+check "Ресурс kr2 активирован" "/etc/nginx/sites-available/kr2" "$(readlink -f /etc/nginx/sites-enabled/kr2 2>/dev/null)"
+
 echo "Пройдено: $PASS, не пройдено: $FAIL"
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
