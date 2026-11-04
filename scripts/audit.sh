@@ -59,7 +59,7 @@ check "Порт 8200 прослушивается только на 127.0.0.1" "
 check "Файл с корневым токеном имеет права 600" "600" "$(stat -c '%a' "/home/${SUDO_USER:-$USER}/.vault-root" 2>/dev/null)"
 
 
-echo "[6] Контрольная работа № 2"
+echo "[7] Контрольная работа № 2"
 KR2_DIR="/home/${SUDO_USER:-$USER}/kr2"
 KR2_PORT=8002
 KR2_REDIS="$(sudo docker compose --project-directory "$KR2_DIR" ps -q redis 2>/dev/null)"
