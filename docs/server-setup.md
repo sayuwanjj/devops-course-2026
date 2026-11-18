@@ -281,3 +281,37 @@ vault kv put secret/devops-app/db $(grep -v '^#' ~/app/.env | xargs)
 ```
 
 Ограничение учебного стенда: dev-сервер хранит данные в памяти. Для эксплуатации требуется сервер с постоянным хранилищем (`storage "raft"`), TLS, распечатыванием по ключам Шамира или auto-unseal и отказом от корневого токена после настройки.
+
+## 11. Ansible
+
+Проект находится в `ansible/`. Управляющий узел — Ubuntu в WSL с Ansible
+Core 2.16. Управляемый узел — копия Ubuntu Server 24.04 из снимка
+`01-clean-install`. На стенде используется локальный NAT: SSH гостя на
+порту 22 доступен в Windows на `127.0.0.1:2213`, в WSL на
+`127.0.0.1:2211` через локальный мост. При прямой доступности SSH укажите
+адрес и порт ВМ в обоих inventory. Внешний HTTP на хосте — `127.0.0.1:8011`.
+
+- `inventory/bootstrap.ini` — первый вход как `student` с паролем SSH и sudo.
+- `inventory/prod.ini` — вход как `devops` с ключом `~/.ssh/devops_vm`.
+- `base` — проверка ОС, зависимости, репозиторий Docker и Docker Engine.
+- `ssh` — пользователь, открытый ключ, sudo, sshd и UFW для портов 22 и 80.
+- `nginx` — сайт reverse proxy, проверка конфигурации и reload.
+- `app` — загрузка образа, запуск контейнера и проверка его HTTP-ответа.
+
+Образ `ghcr.io/sayuwanjj/devops-ci-app:3de8c427f4abdfef7a7e9e998ad1ac552b8862ae` задан в
+`group_vars/all.yml`. Контейнер принимает соединения на порту 5000.
+Публикация на ВМ ограничена `127.0.0.1:5000`. Nginx проксирует запросы на
+порт 5000. Маршрут `/health` возвращает `{"status":"ok"}`.
+
+```bash
+cd ansible
+ansible-galaxy collection install -r requirements.yml
+ansible-playbook -i inventory/bootstrap.ini site.yml --syntax-check
+ansible-playbook -i inventory/bootstrap.ini site.yml --ask-pass --ask-become-pass
+ansible-playbook site.yml
+ansible-playbook verify.yml
+```
+
+Открытый ключ для bootstrap читается из `~/.ssh/devops_vm.pub`.
+Команда `verify.yml` проверяет SSH, состояние контейнера и HTTP
+без изменения конфигурации.
